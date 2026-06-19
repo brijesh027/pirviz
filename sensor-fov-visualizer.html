@@ -276,7 +276,8 @@
   <!-- Instruction hint, hidden after first tap -->
   <div id="tapHint">
     <span class="hint-icon">👆</span>
-    Tap the ceiling where<br>the sensor is mounted
+    Point camera at ceiling &amp; tap<br>where the sensor is mounted.<br>
+    <span style="font-size:13px;opacity:0.65">Detection cone projects downward to floor.</span>
   </div>
 
   <!-- Coverage readout, shown after first tap -->
@@ -468,122 +469,238 @@
 
     // =============================================================
     //  DRAW ONE FRAME  (called by requestAnimationFrame)
+    //
+    //  Visualization concept:
+    //    The sensor is mounted on the ceiling at the tap point.
+    //    Its FOV projects DOWNWARD as a cone (PIR) or rectangular
+    //    frustum (MLX90642).  We draw this as:
+    //      • a sensor dot anchored to the ceiling at the tap point
+    //      • diverging lines showing the cone edges going downward
+    //      • a filled floor-footprint shape at the base of the cone
+    //
+    //  "Downward on screen" is used as a proxy for "toward the floor"
+    //  because the camera is pointing at the ceiling — the floor is
+    //  behind the viewer and cannot appear in the feed.
     // =============================================================
 
     function drawFrame() {
       requestAnimationFrame(drawFrame);
 
       const dpr = window.devicePixelRatio || 1;
-      const cw  = canvasEl.width;
-      const ch  = canvasEl.height;
-
-      // Clear the entire canvas each frame
-      ctx.clearRect(0, 0, cw, ch);
+      ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
 
       if (!state.tapPoint) return;
 
       // Tap point in physical pixels
-      const tx = state.tapPoint.x * dpr;
-      const ty = state.tapPoint.y * dpr;
-
+      const tx  = state.tapPoint.x * dpr;
+      const ty  = state.tapPoint.y * dpr;
       const ppm = physicalPixelsPerMetre();
 
-      // Advance pulse animation phase (~60 fps × 0.045 ≈ 2.7 rad/s)
       pulsePhase += 0.045;
       const sinP = Math.sin(pulsePhase);
 
-      // ── Save default context state ────────────────────────────
+      // ── Cone height on screen ─────────────────────────────────
+      // Physical cone height = ceilingHeight metres × pixels-per-metre.
+      // Capped at 65 % of canvas height so the footprint stays on screen.
+      // The cone angle is preserved when capping (base width scales with height).
+      const fullConeH = state.ceilingHeight * ppm;
+      const maxConeH  = canvasEl.height * 0.65;
+      const coneH     = Math.min(fullConeH, maxConeH);
+      const coneRatio = coneH / fullConeH; // < 1 when capped
+
+      // Centre of the floor footprint (directly below the sensor)
+      const baseX = tx;
+      const baseY = ty + coneH;
+
       ctx.save();
 
       if (state.sensorType === 'pir') {
-        // ── PIR: semi-transparent blue circle ──────────────────
+        // ── PIR: downward cone → circular floor footprint ────────
 
-        const rM  = pirRadiusM();
-        const rPx = rM * ppm;
+        const rM    = pirRadiusM();
+        const baseR = rM * ppm * coneRatio; // footprint radius (physical px)
 
-        // Animated outer pulse ring
-        const pulseR     = rPx + (10 + 6 * sinP) * dpr;
-        const pulseAlpha = 0.25 + 0.20 * sinP;
+        // ① Cone interior fill (triangle apex→base)
         ctx.beginPath();
-        ctx.arc(tx, ty, pulseR, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(144, 202, 249, ${pulseAlpha.toFixed(2)})`;
-        ctx.lineWidth   = 9 * dpr;
-        ctx.stroke();
-
-        // Semi-transparent fill
-        ctx.beginPath();
-        ctx.arc(tx, ty, rPx, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(33, 150, 243, 0.28)';
+        ctx.moveTo(tx, ty);
+        ctx.lineTo(baseX - baseR, baseY);
+        ctx.lineTo(baseX + baseR, baseY);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(33, 150, 243, 0.14)';
         ctx.fill();
 
-        // Solid border ring
+        // ② Left and right cone boundary lines
+        ctx.strokeStyle = 'rgba(66, 165, 245, 0.72)';
+        ctx.lineWidth   = 2 * dpr;
+        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(baseX - baseR, baseY); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(baseX + baseR, baseY); ctx.stroke();
+
+        // ③ Dashed centre axis (vertical reference line)
+        ctx.setLineDash([6 * dpr, 5 * dpr]);
+        ctx.strokeStyle = 'rgba(144, 202, 249, 0.42)';
+        ctx.lineWidth   = 1.5 * dpr;
+        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(baseX, baseY); ctx.stroke();
+        ctx.setLineDash([]);
+
+        // ④ Floor footprint — animated pulse ring
+        const pulseR = baseR + (9 + 6 * sinP) * dpr;
         ctx.beginPath();
-        ctx.arc(tx, ty, rPx, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(66, 165, 245, 0.90)';
-        ctx.lineWidth   = 3.5 * dpr;
+        ctx.arc(baseX, baseY, pulseR, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(144, 202, 249, ${(0.16 + 0.12 * sinP).toFixed(2)})`;
+        ctx.lineWidth   = 11 * dpr;
         ctx.stroke();
+
+        // ④ Floor footprint — filled circle
+        ctx.beginPath();
+        ctx.arc(baseX, baseY, baseR, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(33, 150, 243, 0.30)';
+        ctx.fill();
+
+        // ④ Floor footprint — solid border ring
+        ctx.beginPath();
+        ctx.arc(baseX, baseY, baseR, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(66, 165, 245, 0.92)';
+        ctx.lineWidth   = 2.5 * dpr;
+        ctx.stroke();
+
+        // ⑤ Dimension pill below footprint (diameter in metres)
+        drawDimLabel(baseX, baseY + baseR + 10 * dpr, `Ø ${(rM * 2).toFixed(1)} m`, dpr);
 
       } else {
-        // ── MLX90642: semi-transparent orange rectangle ─────────
+        // ── MLX90642: downward frustum → rectangular floor footprint ─
 
         const { w: wM, h: hM } = mlxDimsM();
-        const wPx = wM * ppm;
-        const hPx = hM * ppm;
+        const baseW  = wM * ppm * coneRatio;   // footprint width  (physical px)
+        const baseHp = hM * ppm * coneRatio;   // footprint height (physical px)
 
-        const left = tx - wPx / 2;
-        const top  = ty - hPx / 2;
+        const rLeft = baseX - baseW / 2;
+        const rTop  = baseY - baseHp / 2;
 
-        // Animated outer pulse ring (circle fitted to rectangle diagonal)
-        const diagPx     = Math.sqrt(wPx * wPx + hPx * hPx) / 2;
-        const pulseR     = diagPx + (8 + 6 * sinP) * dpr;
-        const pulseAlpha = 0.25 + 0.20 * sinP;
+        // ① Trapezoid interior fill (apex→base, horizontal FOV cross-section)
         ctx.beginPath();
-        ctx.arc(tx, ty, pulseR, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(255, 204, 128, ${pulseAlpha.toFixed(2)})`;
-        ctx.lineWidth   = 9 * dpr;
+        ctx.moveTo(tx, ty);
+        ctx.lineTo(rLeft,          baseY);
+        ctx.lineTo(rLeft + baseW,  baseY);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(255, 111, 0, 0.14)';
+        ctx.fill();
+
+        // ② Cone boundary lines
+        ctx.strokeStyle = 'rgba(255, 167, 38, 0.72)';
+        ctx.lineWidth   = 2 * dpr;
+        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(rLeft,         baseY); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(rLeft + baseW, baseY); ctx.stroke();
+
+        // ③ Dashed centre axis
+        ctx.setLineDash([6 * dpr, 5 * dpr]);
+        ctx.strokeStyle = 'rgba(255, 204, 128, 0.42)';
+        ctx.lineWidth   = 1.5 * dpr;
+        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(baseX, baseY); ctx.stroke();
+        ctx.setLineDash([]);
+
+        // ④ Floor footprint — animated pulse ring
+        const diag   = Math.sqrt(baseW * baseW + baseHp * baseHp) / 2;
+        const pulseR = diag + (9 + 6 * sinP) * dpr;
+        ctx.beginPath();
+        ctx.arc(baseX, baseY, pulseR, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255, 204, 128, ${(0.16 + 0.12 * sinP).toFixed(2)})`;
+        ctx.lineWidth   = 11 * dpr;
         ctx.stroke();
 
-        // Semi-transparent fill
-        ctx.fillStyle = 'rgba(255, 111, 0, 0.28)';
-        ctx.fillRect(left, top, wPx, hPx);
+        // ④ Floor footprint — filled rectangle
+        ctx.fillStyle = 'rgba(255, 111, 0, 0.30)';
+        ctx.fillRect(rLeft, rTop, baseW, baseHp);
 
-        // Solid border
+        // ④ Floor footprint — solid border
         ctx.strokeStyle = 'rgba(255, 167, 38, 0.92)';
-        ctx.lineWidth   = 3.5 * dpr;
-        ctx.strokeRect(left, top, wPx, hPx);
-
-        // Corner accent marks (small L-shapes at each corner)
-        const cm = 12 * dpr;   // corner mark length
-        ctx.strokeStyle = 'rgba(255, 213, 79, 0.95)';
         ctx.lineWidth   = 2.5 * dpr;
-        ctx.lineJoin    = 'miter';
-        [[left, top], [left + wPx, top], [left, top + hPx], [left + wPx, top + hPx]]
+        ctx.strokeRect(rLeft, rTop, baseW, baseHp);
+
+        // ④ Corner accent L-marks
+        const cm = 10 * dpr;
+        ctx.strokeStyle = 'rgba(255, 213, 79, 0.95)';
+        ctx.lineWidth   = 2 * dpr;
+        [[rLeft, rTop], [rLeft + baseW, rTop], [rLeft, rTop + baseHp], [rLeft + baseW, rTop + baseHp]]
           .forEach(([cx, cy], i) => {
-            const sx = (i % 2 === 0) ?  1 : -1;   // sign for x direction
-            const sy = (i < 2)       ?  1 : -1;   // sign for y direction
+            const sx = i % 2 === 0 ?  1 : -1;
+            const sy = i < 2       ?  1 : -1;
             ctx.beginPath();
             ctx.moveTo(cx + sx * cm, cy);
-            ctx.lineTo(cx,           cy);
-            ctx.lineTo(cx,           cy + sy * cm);
+            ctx.lineTo(cx, cy);
+            ctx.lineTo(cx, cy + sy * cm);
             ctx.stroke();
           });
+
+        // ⑤ Dimension pill below footprint
+        drawDimLabel(baseX, rTop + baseHp + 10 * dpr, `${wM.toFixed(1)} × ${hM.toFixed(1)} m`, dpr);
       }
 
-      // ── Sensor position dot (white ring + coloured centre) ───
-      const DOT_OUTER = 9 * dpr;
-      const DOT_INNER = 5 * dpr;
-
+      // ── Ceiling mount bracket at sensor point ────────────────
+      // A short horizontal bar + hatching indicates the sensor is
+      // mounted flush to a ceiling surface, not floating in space.
+      const barLen = 22 * dpr;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+      ctx.lineWidth   = 3 * dpr;
       ctx.beginPath();
-      ctx.arc(tx, ty, DOT_OUTER, 0, Math.PI * 2);
+      ctx.moveTo(tx - barLen, ty);
+      ctx.lineTo(tx + barLen, ty);
+      ctx.stroke();
+
+      // Hatching marks above the bar (represent the ceiling surface)
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.20)';
+      ctx.lineWidth   = 1.5 * dpr;
+      for (let i = -3; i <= 3; i++) {
+        const hx = tx + i * 7 * dpr;
+        ctx.beginPath();
+        ctx.moveTo(hx,           ty);
+        ctx.lineTo(hx - 5 * dpr, ty - 8 * dpr);
+        ctx.stroke();
+      }
+
+      // ── Sensor dot ───────────────────────────────────────────
+      ctx.beginPath();
+      ctx.arc(tx, ty, 9 * dpr, 0, Math.PI * 2);
       ctx.fillStyle = '#ffffff';
       ctx.fill();
 
       ctx.beginPath();
-      ctx.arc(tx, ty, DOT_INNER, 0, Math.PI * 2);
-      ctx.fillStyle = (state.sensorType === 'pir') ? '#1565C0' : '#E65100';
+      ctx.arc(tx, ty, 5 * dpr, 0, Math.PI * 2);
+      ctx.fillStyle = state.sensorType === 'pir' ? '#1565C0' : '#E65100';
       ctx.fill();
 
       ctx.restore();
+    }
+
+    // Small rounded-pill label drawn on the canvas at (x, y top-left of pill centre).
+    function drawDimLabel(cx, y, text, dpr) {
+      const fs  = 12 * dpr;
+      ctx.font  = `600 ${fs}px -apple-system, sans-serif`;
+      const tw  = ctx.measureText(text).width;
+      const pad = 5 * dpr;
+      const bw  = tw + pad * 2;
+      const bh  = fs + pad * 2;
+      const r   = 4 * dpr;
+      const x   = cx - bw / 2;
+
+      // Background pill
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + bw - r, y);
+      ctx.quadraticCurveTo(x + bw, y, x + bw, y + r);
+      ctx.lineTo(x + bw, y + bh - r);
+      ctx.quadraticCurveTo(x + bw, y + bh, x + bw - r, y + bh);
+      ctx.lineTo(x + r, y + bh);
+      ctx.quadraticCurveTo(x, y + bh, x, y + bh - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.fill();
+
+      ctx.fillStyle    = 'rgba(255, 255, 255, 0.90)';
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(text, cx, y + pad);
     }
 
 
