@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <!--
+    viewport-fit=cover: content extends into iPhone notch / home-bar areas.
+    maximum-scale=1, user-scalable=no: prevent pinch-zoom interfering with tap detection.
+  -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Sensor FOV Visualizer</title>
+
+  <style>
+    /* ── Reset ── */
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100dvh;       /* dynamic viewport height — shrinks Safari address bar out */
+      overflow: hidden;
+      background: #000;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Live camera feed (z=1, bottom of visual stack) ── */
+    #cameraFeed {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      z-index: 1;
+    }
+
+    /* ── 2D canvas overlay (z=2, drawn on top of video) ── */
+    /* pointer-events: none so taps pass through to the tap-capture div */
+    #overlayCanvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    /* ── Transparent full-screen div that captures all tap / click events ── */
+    #tapOverlay {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+    }
+
+    /* ── First-use instruction hint (hidden after first tap) ── */
+    #tapHint {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 4;
+      pointer-events: none;
+      color: rgba(255, 255, 255, 0.92);
+      font-size: 17px;
+      font-weight: 500;
+      text-align: center;
+      background: rgba(0, 0, 0, 0.55);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      padding: 14px 22px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      line-height: 1.5;
+    }
+
+    #tapHint .hint-icon { font-size: 28px; display: block; margin-bottom: 6px; }
+
+    /* ── Coverage readout pill (top-centre, shown after first tap) ── */
+    #coverageDisplay {
+      display: none;
+      position: absolute;
+      top: max(20px, env(safe-area-inset-top, 20px));
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 4;
+      pointer-events: none;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+      background: rgba(0, 0, 0, 0.62);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      padding: 8px 18px;
+      border-radius: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      white-space: nowrap;
+    }
+
+    /* ── Bottom control panel ── */
+    #uiPanel {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 5;
+      background: rgba(18, 18, 18, 0.82);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-top: 1px solid rgba(255, 255, 255, 0.10);
+      padding: 16px 20px;
+      padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .control-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .control-label {
+      color: rgba(255, 255, 255, 0.55);
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      min-width: 68px;
+    }
+
+    /* ── Sensor type segmented control ── */
+    #sensorToggle {
+      flex: 1;
+      display: flex;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 9px;
+      padding: 3px;
+      gap: 3px;
+    }
+
+    .sensor-btn {
+      flex: 1;
+      padding: 7px 4px;
+      border: none;
+      background: transparent;
+      color: rgba(255, 255, 255, 0.50);
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: background 0.18s, color 0.18s;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .sensor-btn.active {
+      background: rgba(255, 255, 255, 0.18);
+      color: #fff;
+    }
+
+    /* ── Ceiling height number input ── */
+    #ceilingHeightInput {
+      width: 68px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 9px;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 500;
+      padding: 7px 10px;
+      text-align: center;
+      outline: none;
+      -webkit-appearance: none;
+    }
+
+    #ceilingHeightInput:focus { border-color: rgba(255, 255, 255, 0.40); }
+
+    .unit-label {
+      color: rgba(255, 255, 255, 0.40);
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    /* ── PIR FOV slider row (visible by default; hidden when MLX selected) ── */
+    #pirFovRow { display: flex; }
+
+    #pirFovSlider {
+      flex: 1;
+      height: 4px;
+      border-radius: 2px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: rgba(255, 255, 255, 0.20);
+      outline: none;
+      cursor: pointer;
+    }
+
+    #pirFovSlider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #2196F3;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.40);
+      cursor: pointer;
+    }
+
+    #pirFovValue {
+      color: rgba(255, 255, 255, 0.75);
+      font-size: 13px;
+      font-weight: 600;
+      min-width: 36px;
+      text-align: right;
+    }
+
+    /* ── Camera permission / error screen ── */
+    #errorScreen {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: #111;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 36px 28px;
+      text-align: center;
+    }
+
+    #errorScreen .err-icon { font-size: 52px; margin-bottom: 18px; }
+
+    #errorScreen h2 {
+      color: #fff;
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    #errorScreen p {
+      color: rgba(255, 255, 255, 0.55);
+      font-size: 15px;
+      line-height: 1.6;
+      max-width: 320px;
+    }
+
+    #retryBtn {
+      margin-top: 28px;
+      padding: 13px 30px;
+      background: #2196F3;
+      border: none;
+      border-radius: 13px;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Live rear-camera feed -->
+  <video id="cameraFeed" autoplay playsinline muted></video>
+
+  <!--
+    Native Canvas 2D overlay.
+    No external libraries — works fully offline from file://.
+    pointer-events: none lets taps fall through to #tapOverlay below.
+  -->
+  <canvas id="overlayCanvas"></canvas>
+
+  <!-- Transparent full-screen div that captures all tap / click events -->
+  <div id="tapOverlay"></div>
+
+  <!-- Instruction hint, hidden after first tap -->
+  <div id="tapHint">
+    <span class="hint-icon">👆</span>
+    Tap the ceiling where<br>the sensor is mounted
+  </div>
+
+  <!-- Coverage readout, shown after first tap -->
+  <div id="coverageDisplay"></div>
+
+  <!-- ── Bottom control panel ── -->
+  <div id="uiPanel">
+
+    <div class="control-row">
+      <span class="control-label">Sensor</span>
+      <div id="sensorToggle">
+        <button class="sensor-btn active" data-type="pir">PIR</button>
+        <button class="sensor-btn"        data-type="mlx">MLX90642</button>
+      </div>
+    </div>
+
+    <div class="control-row">
+      <span class="control-label">Ceiling</span>
+      <input type="number" id="ceilingHeightInput" value="3.0" min="1.5" max="15" step="0.1" inputmode="decimal">
+      <span class="unit-label">m</span>
+    </div>
+
+    <!-- PIR FOV slider — hidden when MLX is selected -->
+    <div class="control-row" id="pirFovRow">
+      <span class="control-label">FOV</span>
+      <input type="range" id="pirFovSlider" min="60" max="120" value="90" step="5">
+      <span id="pirFovValue">90°</span>
+    </div>
+
+  </div>
+
+  <!-- Camera permission / error screen -->
+  <div id="errorScreen">
+    <div class="err-icon">📷</div>
+    <h2>Camera Access Needed</h2>
+    <p id="errorMsg">Please allow camera access in Settings → Safari → Camera, then reload.</p>
+    <button id="retryBtn" onclick="location.reload()">Try Again</button>
+  </div>
+
+  <!--
+    NO external scripts — everything below is vanilla JS using the
+    built-in Canvas 2D API.  File opens directly from file:// with
+    no network requests whatsoever.
+  -->
+  <script>
+    // =============================================================
+    //  SENSOR FOV VISUALIZER
+    //  Vanilla JS + Canvas 2D  ·  zero dependencies  ·  offline-safe
+    //  Open as file:// on iPhone Safari — no server required
+    // =============================================================
+
+    // ── MLX90642 fixed field-of-view ─────────────────────────────
+    const MLX_HFOV_DEG = 33;   // horizontal
+    const MLX_VFOV_DEG = 25;   // vertical
+
+    // ── Approximate iPhone wide-lens horizontal FOV ───────────────
+    // iPhone 17 Pro Max main (1×) lens ≈ 65° horizontal.
+    // Used only to estimate a pixel-per-metre scale; not WebXR-accurate.
+    const APPROX_CAMERA_HFOV_DEG = 65;
+
+    // ── Application state ─────────────────────────────────────────
+    const state = {
+      sensorType:    'pir',   // 'pir' | 'mlx'
+      ceilingHeight: 3.0,     // metres
+      pirFovDeg:     90,      // degrees, range 60–120
+      tapPoint:      null,    // { x, y } in CSS pixels; null = no tap yet
+    };
+
+    // ── Animation ─────────────────────────────────────────────────
+    let pulsePhase = 0;   // advances each frame for the breathing pulse ring
+
+    // ── DOM references ────────────────────────────────────────────
+    const videoEl       = document.getElementById('cameraFeed');
+    const canvasEl      = document.getElementById('overlayCanvas');
+    const tapOverlayEl  = document.getElementById('tapOverlay');
+    const tapHintEl     = document.getElementById('tapHint');
+    const coverageEl    = document.getElementById('coverageDisplay');
+    const errorScreenEl = document.getElementById('errorScreen');
+    const errorMsgEl    = document.getElementById('errorMsg');
+
+    // Canvas 2D context — obtained once, reused every frame
+    const ctx = canvasEl.getContext('2d');
+
+
+    // =============================================================
+    //  CAMERA FEED
+    // =============================================================
+
+    async function startCamera() {
+      try {
+        // First attempt: exact rear camera
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { exact: 'environment' },
+            width:  { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+          audio: false,
+        });
+        videoEl.srcObject = stream;
+        await videoEl.play();
+      } catch (err) {
+        // OverconstrainedError: device lacks a labelled rear camera — retry softly
+        if (err.name === 'OverconstrainedError' || err.name === 'ConstraintNotSatisfiedError') {
+          await retryWithSoftConstraint();
+        } else {
+          showCameraError(err);
+        }
+      }
+    }
+
+    async function retryWithSoftConstraint() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' },
+          audio: false,
+        });
+        videoEl.srcObject = stream;
+        await videoEl.play();
+      } catch (err) {
+        showCameraError(err);
+      }
+    }
+
+    function showCameraError(err) {
+      let msg = 'Unable to access the camera on this device.';
+
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        msg = 'Camera permission denied. Go to Settings → Safari → Camera, enable access, then tap Try Again.';
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        msg = 'No camera was found on this device.';
+      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+        msg = 'The camera is in use by another app. Close other apps and tap Try Again.';
+      } else if (err.name === 'SecurityError') {
+        msg = 'Camera blocked by security policy. On iOS, file:// pages support getUserMedia — if you see this, check Settings → Safari → Camera.';
+      }
+
+      errorMsgEl.textContent = msg;
+      errorScreenEl.style.display = 'flex';
+    }
+
+
+    // =============================================================
+    //  CANVAS SIZING
+    // Backing store must be in physical pixels (devicePixelRatio)
+    // so shapes are crisp on Retina / ProMotion displays.
+    // =============================================================
+
+    function resizeCanvas() {
+      const dpr = window.devicePixelRatio || 1;
+      canvasEl.width  = window.innerWidth  * dpr;
+      canvasEl.height = window.innerHeight * dpr;
+      // CSS keeps it at 100% × 100% via the stylesheet
+    }
+
+
+    // =============================================================
+    //  FOV GEOMETRY MATH
+    // =============================================================
+
+    /** Radius of PIR coverage circle on the floor (metres). */
+    function pirRadiusM() {
+      return Math.tan((state.pirFovDeg / 2) * (Math.PI / 180)) * state.ceilingHeight;
+    }
+
+    /** Width × height of MLX90642 coverage footprint on the floor (metres). */
+    function mlxDimsM() {
+      return {
+        w: 2 * Math.tan((MLX_HFOV_DEG / 2) * (Math.PI / 180)) * state.ceilingHeight,
+        h: 2 * Math.tan((MLX_VFOV_DEG / 2) * (Math.PI / 180)) * state.ceilingHeight,
+      };
+    }
+
+    /**
+     * Pixels per metre (physical pixels, DPR-adjusted).
+     *
+     * At ceiling height H, the phone camera shows a ceiling strip roughly
+     *   2 × tan(HFOV/2) × H  metres wide, stretched across the screen width.
+     * Dividing gives the scale factor.  This is approximate — no device
+     * intrinsics are available without WebXR.
+     */
+    function physicalPixelsPerMetre() {
+      const dpr = window.devicePixelRatio || 1;
+      const visibleWidthM = 2 * Math.tan((APPROX_CAMERA_HFOV_DEG / 2) * (Math.PI / 180))
+                              * state.ceilingHeight;
+      return (window.innerWidth * dpr) / visibleWidthM;
+    }
+
+
+    // =============================================================
+    //  DRAW ONE FRAME  (called by requestAnimationFrame)
+    // =============================================================
+
+    function drawFrame() {
+      requestAnimationFrame(drawFrame);
+
+      const dpr = window.devicePixelRatio || 1;
+      const cw  = canvasEl.width;
+      const ch  = canvasEl.height;
+
+      // Clear the entire canvas each frame
+      ctx.clearRect(0, 0, cw, ch);
+
+      if (!state.tapPoint) return;
+
+      // Tap point in physical pixels
+      const tx = state.tapPoint.x * dpr;
+      const ty = state.tapPoint.y * dpr;
+
+      const ppm = physicalPixelsPerMetre();
+
+      // Advance pulse animation phase (~60 fps × 0.045 ≈ 2.7 rad/s)
+      pulsePhase += 0.045;
+      const sinP = Math.sin(pulsePhase);
+
+      // ── Save default context state ────────────────────────────
+      ctx.save();
+
+      if (state.sensorType === 'pir') {
+        // ── PIR: semi-transparent blue circle ──────────────────
+
+        const rM  = pirRadiusM();
+        const rPx = rM * ppm;
+
+        // Animated outer pulse ring
+        const pulseR     = rPx + (10 + 6 * sinP) * dpr;
+        const pulseAlpha = 0.25 + 0.20 * sinP;
+        ctx.beginPath();
+        ctx.arc(tx, ty, pulseR, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(144, 202, 249, ${pulseAlpha.toFixed(2)})`;
+        ctx.lineWidth   = 9 * dpr;
+        ctx.stroke();
+
+        // Semi-transparent fill
+        ctx.beginPath();
+        ctx.arc(tx, ty, rPx, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(33, 150, 243, 0.28)';
+        ctx.fill();
+
+        // Solid border ring
+        ctx.beginPath();
+        ctx.arc(tx, ty, rPx, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(66, 165, 245, 0.90)';
+        ctx.lineWidth   = 3.5 * dpr;
+        ctx.stroke();
+
+      } else {
+        // ── MLX90642: semi-transparent orange rectangle ─────────
+
+        const { w: wM, h: hM } = mlxDimsM();
+        const wPx = wM * ppm;
+        const hPx = hM * ppm;
+
+        const left = tx - wPx / 2;
+        const top  = ty - hPx / 2;
+
+        // Animated outer pulse ring (circle fitted to rectangle diagonal)
+        const diagPx     = Math.sqrt(wPx * wPx + hPx * hPx) / 2;
+        const pulseR     = diagPx + (8 + 6 * sinP) * dpr;
+        const pulseAlpha = 0.25 + 0.20 * sinP;
+        ctx.beginPath();
+        ctx.arc(tx, ty, pulseR, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255, 204, 128, ${pulseAlpha.toFixed(2)})`;
+        ctx.lineWidth   = 9 * dpr;
+        ctx.stroke();
+
+        // Semi-transparent fill
+        ctx.fillStyle = 'rgba(255, 111, 0, 0.28)';
+        ctx.fillRect(left, top, wPx, hPx);
+
+        // Solid border
+        ctx.strokeStyle = 'rgba(255, 167, 38, 0.92)';
+        ctx.lineWidth   = 3.5 * dpr;
+        ctx.strokeRect(left, top, wPx, hPx);
+
+        // Corner accent marks (small L-shapes at each corner)
+        const cm = 12 * dpr;   // corner mark length
+        ctx.strokeStyle = 'rgba(255, 213, 79, 0.95)';
+        ctx.lineWidth   = 2.5 * dpr;
+        ctx.lineJoin    = 'miter';
+        [[left, top], [left + wPx, top], [left, top + hPx], [left + wPx, top + hPx]]
+          .forEach(([cx, cy], i) => {
+            const sx = (i % 2 === 0) ?  1 : -1;   // sign for x direction
+            const sy = (i < 2)       ?  1 : -1;   // sign for y direction
+            ctx.beginPath();
+            ctx.moveTo(cx + sx * cm, cy);
+            ctx.lineTo(cx,           cy);
+            ctx.lineTo(cx,           cy + sy * cm);
+            ctx.stroke();
+          });
+      }
+
+      // ── Sensor position dot (white ring + coloured centre) ───
+      const DOT_OUTER = 9 * dpr;
+      const DOT_INNER = 5 * dpr;
+
+      ctx.beginPath();
+      ctx.arc(tx, ty, DOT_OUTER, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(tx, ty, DOT_INNER, 0, Math.PI * 2);
+      ctx.fillStyle = (state.sensorType === 'pir') ? '#1565C0' : '#E65100';
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+
+    // =============================================================
+    //  COVERAGE READOUT
+    // Updates the top pill whenever state changes.
+    // =============================================================
+
+    function updateCoverageText() {
+      if (!state.tapPoint) return;
+
+      let m2;
+      if (state.sensorType === 'pir') {
+        const r = pirRadiusM();
+        m2 = Math.PI * r * r;
+      } else {
+        const { w, h } = mlxDimsM();
+        m2 = w * h;
+      }
+
+      coverageEl.textContent = `Floor coverage ≈ ${m2.toFixed(1)} m²`;
+      coverageEl.style.display = 'block';
+    }
+
+
+    // =============================================================
+    //  TAP / CLICK HANDLER
+    // =============================================================
+
+    function handleTap(e) {
+      e.preventDefault();
+
+      let clientX, clientY;
+      if (e.touches && e.touches.length > 0) {
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+      } else {
+        clientX = e.clientX;
+        clientY = e.clientY;
+      }
+
+      state.tapPoint = { x: clientX, y: clientY };
+      tapHintEl.style.display = 'none';   // hide hint after first tap
+      updateCoverageText();
+    }
+
+
+    // =============================================================
+    //  UI CONTROL BINDINGS
+    // =============================================================
+
+    function bindControls() {
+      // Sensor type segmented control
+      document.querySelectorAll('.sensor-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.sensor-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          state.sensorType = btn.dataset.type;
+
+          // Show FOV slider only for PIR
+          document.getElementById('pirFovRow').style.display =
+            (state.sensorType === 'pir') ? 'flex' : 'none';
+
+          updateCoverageText();
+        });
+      });
+
+      // Ceiling height number input
+      document.getElementById('ceilingHeightInput').addEventListener('input', e => {
+        const val = parseFloat(e.target.value);
+        if (!isNaN(val) && val >= 1.0 && val <= 20.0) {
+          state.ceilingHeight = val;
+          updateCoverageText();
+        }
+      });
+
+      // PIR FOV range slider
+      const fovSlider  = document.getElementById('pirFovSlider');
+      const fovValueEl = document.getElementById('pirFovValue');
+
+      fovSlider.addEventListener('input', e => {
+        state.pirFovDeg       = parseInt(e.target.value, 10);
+        fovValueEl.textContent = `${state.pirFovDeg}°`;
+        updateCoverageText();
+      });
+    }
+
+
+    // =============================================================
+    //  WINDOW RESIZE
+    // =============================================================
+
+    function onResize() {
+      resizeCanvas();
+      // drawFrame() re-reads state each frame — no overlay rebuild needed
+    }
+
+
+    // =============================================================
+    //  ENTRY POINT
+    // =============================================================
+
+    async function init() {
+      resizeCanvas();
+      bindControls();
+
+      tapOverlayEl.addEventListener('touchstart', handleTap, { passive: false });
+      tapOverlayEl.addEventListener('click',      handleTap);
+
+      window.addEventListener('resize', onResize);
+
+      // Start the render loop (runs forever, clears + redraws each frame)
+      requestAnimationFrame(drawFrame);
+
+      await startCamera();
+    }
+
+    init();
+  </script>
+</body>
+</html>
