@@ -2,288 +2,193 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <!--
-    viewport-fit=cover: content extends into iPhone notch / home-bar areas.
-    maximum-scale=1, user-scalable=no: prevent pinch-zoom interfering with tap detection.
-  -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Sensor FOV Visualizer</title>
 
   <style>
-    /* ── Reset ── */
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
     html, body {
       width: 100%;
-      height: 100dvh;       /* dynamic viewport height — shrinks Safari address bar out */
+      height: 100dvh;
       overflow: hidden;
       background: #000;
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
       -webkit-font-smoothing: antialiased;
     }
 
-    /* ── Live camera feed (z=1, bottom of visual stack) ── */
     #cameraFeed {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      z-index: 1;
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      object-fit: cover; z-index: 1;
     }
 
-    /* ── 2D canvas overlay (z=2, drawn on top of video) ── */
-    /* pointer-events: none so taps pass through to the tap-capture div */
+    /* Canvas overlay — pointer-events off so taps fall through */
     #overlayCanvas {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      z-index: 2;
-      pointer-events: none;
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      z-index: 2; pointer-events: none;
     }
 
-    /* ── Transparent full-screen div that captures all tap / click events ── */
-    #tapOverlay {
-      position: absolute;
-      inset: 0;
-      z-index: 3;
-    }
+    /* Transparent div that captures all taps */
+    #tapOverlay { position: absolute; inset: 0; z-index: 3; }
 
-    /* ── First-use instruction hint (hidden after first tap) ── */
+    /* First-use hint */
     #tapHint {
-      position: absolute;
-      top: 50%;
-      left: 50%;
+      position: absolute; top: 42%; left: 50%;
       transform: translate(-50%, -50%);
-      z-index: 4;
-      pointer-events: none;
-      color: rgba(255, 255, 255, 0.92);
-      font-size: 17px;
-      font-weight: 500;
-      text-align: center;
-      background: rgba(0, 0, 0, 0.55);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      padding: 14px 22px;
-      border-radius: 14px;
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      line-height: 1.5;
+      z-index: 4; pointer-events: none;
+      color: rgba(255,255,255,0.92);
+      font-size: 16px; font-weight: 500; text-align: center;
+      background: rgba(0,0,0,0.60);
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      padding: 14px 20px; border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.15); line-height: 1.6;
     }
+    #tapHint .hint-icon { font-size: 26px; display: block; margin-bottom: 6px; }
 
-    #tapHint .hint-icon { font-size: 28px; display: block; margin-bottom: 6px; }
-
-    /* ── Coverage readout pill (top-centre, shown after first tap) ── */
+    /* Coverage readout pill */
     #coverageDisplay {
       display: none;
       position: absolute;
-      top: max(20px, env(safe-area-inset-top, 20px));
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 4;
-      pointer-events: none;
-      color: #fff;
-      font-size: 15px;
-      font-weight: 600;
-      letter-spacing: 0.2px;
-      background: rgba(0, 0, 0, 0.62);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      padding: 8px 18px;
-      border-radius: 20px;
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      white-space: nowrap;
+      top: max(18px, env(safe-area-inset-top, 18px));
+      left: 50%; transform: translateX(-50%);
+      z-index: 4; pointer-events: none;
+      color: #fff; font-size: 14px; font-weight: 600;
+      background: rgba(0,0,0,0.62);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      padding: 7px 16px; border-radius: 20px;
+      border: 1px solid rgba(255,255,255,0.12); white-space: nowrap;
     }
 
-    /* ── Bottom control panel ── */
+    /* Brief toast for errors (e.g. "aim higher") */
+    #toast {
+      display: none;
+      position: absolute; top: 38%; left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 6; pointer-events: none;
+      color: #fff; font-size: 14px; font-weight: 600;
+      background: rgba(0,0,0,0.72);
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      padding: 10px 18px; border-radius: 12px;
+    }
+
+    /* Bottom control panel */
     #uiPanel {
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      right: 0;
+      position: absolute; bottom: 0; left: 0; right: 0;
       z-index: 5;
-      background: rgba(18, 18, 18, 0.82);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border-top: 1px solid rgba(255, 255, 255, 0.10);
-      padding: 16px 20px;
-      padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
+      background: rgba(18,18,18,0.84);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      border-top: 1px solid rgba(255,255,255,0.10);
+      padding: 14px 18px;
+      padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+      display: flex; flex-direction: column; gap: 11px;
     }
 
-    .control-row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
+    .control-row { display: flex; align-items: center; gap: 10px; }
 
     .control-label {
-      color: rgba(255, 255, 255, 0.55);
-      font-size: 12px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.8px;
-      min-width: 68px;
+      color: rgba(255,255,255,0.50);
+      font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.8px;
+      min-width: 60px;
     }
 
-    /* ── Sensor type segmented control ── */
+    /* Sensor segmented control */
     #sensorToggle {
-      flex: 1;
-      display: flex;
-      background: rgba(255, 255, 255, 0.08);
-      border-radius: 9px;
-      padding: 3px;
-      gap: 3px;
+      flex: 1; display: flex;
+      background: rgba(255,255,255,0.08);
+      border-radius: 8px; padding: 3px; gap: 3px;
     }
-
     .sensor-btn {
-      flex: 1;
-      padding: 7px 4px;
-      border: none;
-      background: transparent;
-      color: rgba(255, 255, 255, 0.50);
-      font-size: 13px;
-      font-weight: 600;
-      border-radius: 7px;
-      cursor: pointer;
-      transition: background 0.18s, color 0.18s;
+      flex: 1; padding: 7px 4px;
+      border: none; background: transparent;
+      color: rgba(255,255,255,0.45);
+      font-size: 12px; font-weight: 700; border-radius: 6px;
+      cursor: pointer; transition: background 0.15s, color 0.15s;
       -webkit-tap-highlight-color: transparent;
     }
+    .sensor-btn.active { background: rgba(255,255,255,0.18); color: #fff; }
 
-    .sensor-btn.active {
-      background: rgba(255, 255, 255, 0.18);
-      color: #fff;
+    /* Number inputs */
+    .num-input {
+      width: 62px; background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15); border-radius: 8px;
+      color: #fff; font-size: 15px; font-weight: 500;
+      padding: 6px 8px; text-align: center;
+      outline: none; -webkit-appearance: none;
     }
+    .num-input:focus { border-color: rgba(255,255,255,0.38); }
 
-    /* ── Ceiling height number input ── */
-    #ceilingHeightInput {
-      width: 68px;
-      background: rgba(255, 255, 255, 0.08);
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      border-radius: 9px;
-      color: #fff;
-      font-size: 16px;
-      font-weight: 500;
-      padding: 7px 10px;
-      text-align: center;
-      outline: none;
-      -webkit-appearance: none;
-    }
+    .unit-label { color: rgba(255,255,255,0.38); font-size: 12px; font-weight: 500; }
 
-    #ceilingHeightInput:focus { border-color: rgba(255, 255, 255, 0.40); }
-
-    .unit-label {
-      color: rgba(255, 255, 255, 0.40);
-      font-size: 13px;
-      font-weight: 500;
-    }
-
-    /* ── PIR FOV slider row (visible by default; hidden when MLX selected) ── */
+    /* PIR FOV slider */
     #pirFovRow { display: flex; }
-
     #pirFovSlider {
-      flex: 1;
-      height: 4px;
-      border-radius: 2px;
-      -webkit-appearance: none;
-      appearance: none;
-      background: rgba(255, 255, 255, 0.20);
-      outline: none;
-      cursor: pointer;
+      flex: 1; height: 4px; border-radius: 2px;
+      -webkit-appearance: none; appearance: none;
+      background: rgba(255,255,255,0.18); outline: none; cursor: pointer;
     }
-
     #pirFovSlider::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 22px;
-      height: 22px;
-      border-radius: 50%;
-      background: #2196F3;
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.40);
-      cursor: pointer;
+      -webkit-appearance: none; width: 22px; height: 22px;
+      border-radius: 50%; background: #2196F3;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.4); cursor: pointer;
     }
+    #pirFovValue { color: rgba(255,255,255,0.75); font-size: 12px; font-weight: 700; min-width: 34px; text-align: right; }
 
-    #pirFovValue {
-      color: rgba(255, 255, 255, 0.75);
-      font-size: 13px;
-      font-weight: 600;
-      min-width: 36px;
-      text-align: right;
-    }
-
-    /* ── Camera permission / error screen ── */
-    #errorScreen {
-      display: none;
-      position: fixed;
-      inset: 0;
-      z-index: 100;
-      background: #111;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 36px 28px;
-      text-align: center;
-    }
-
-    #errorScreen .err-icon { font-size: 52px; margin-bottom: 18px; }
-
-    #errorScreen h2 {
-      color: #fff;
-      font-size: 20px;
-      font-weight: 700;
-      margin-bottom: 12px;
-    }
-
-    #errorScreen p {
-      color: rgba(255, 255, 255, 0.55);
-      font-size: 15px;
-      line-height: 1.6;
-      max-width: 320px;
-    }
-
-    #retryBtn {
-      margin-top: 28px;
-      padding: 13px 30px;
-      background: #2196F3;
-      border: none;
-      border-radius: 13px;
-      color: #fff;
-      font-size: 16px;
-      font-weight: 700;
-      cursor: pointer;
+    /* Motion sensors button */
+    #orientBtn {
+      flex: 1; padding: 7px 8px; border-radius: 7px;
+      font-size: 11px; font-weight: 700; cursor: pointer;
       -webkit-tap-highlight-color: transparent;
+      transition: all 0.2s;
+    }
+    #orientBtn.inactive {
+      background: rgba(255,193,7,0.15);
+      color: rgba(255,193,7,0.90);
+      border: 1px solid rgba(255,193,7,0.30);
+    }
+    #orientBtn.active {
+      background: rgba(76,175,80,0.15);
+      color: rgba(76,175,80,0.90);
+      border: 1px solid rgba(76,175,80,0.30);
+    }
+
+    /* Error / permission screen */
+    #errorScreen {
+      display: none; position: fixed; inset: 0; z-index: 100;
+      background: #111; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 36px 28px; text-align: center;
+    }
+    #errorScreen .err-icon { font-size: 52px; margin-bottom: 18px; }
+    #errorScreen h2 { color: #fff; font-size: 20px; font-weight: 700; margin-bottom: 12px; }
+    #errorScreen p { color: rgba(255,255,255,0.55); font-size: 15px; line-height: 1.6; max-width: 320px; }
+    #retryBtn {
+      margin-top: 28px; padding: 13px 30px;
+      background: #2196F3; border: none; border-radius: 13px;
+      color: #fff; font-size: 16px; font-weight: 700; cursor: pointer;
     }
   </style>
 </head>
 <body>
 
-  <!-- Live rear-camera feed -->
   <video id="cameraFeed" autoplay playsinline muted></video>
-
-  <!--
-    Native Canvas 2D overlay.
-    No external libraries — works fully offline from file://.
-    pointer-events: none lets taps fall through to #tapOverlay below.
-  -->
   <canvas id="overlayCanvas"></canvas>
-
-  <!-- Transparent full-screen div that captures all tap / click events -->
   <div id="tapOverlay"></div>
 
-  <!-- Instruction hint, hidden after first tap -->
   <div id="tapHint">
-    <span class="hint-icon">👆</span>
-    Point camera at ceiling &amp; tap<br>where the sensor is mounted.<br>
-    <span style="font-size:13px;opacity:0.65">Detection cone projects downward to floor.</span>
+    <span class="hint-icon">📐</span>
+    Hold phone to see ceiling &amp; floor.<br>
+    Tap where the sensor is mounted.
   </div>
 
-  <!-- Coverage readout, shown after first tap -->
   <div id="coverageDisplay"></div>
+  <div id="toast"></div>
 
-  <!-- ── Bottom control panel ── -->
+  <!-- Bottom panel -->
   <div id="uiPanel">
 
     <div class="control-row">
@@ -296,529 +201,634 @@
 
     <div class="control-row">
       <span class="control-label">Ceiling</span>
-      <input type="number" id="ceilingHeightInput" value="3.0" min="1.5" max="15" step="0.1" inputmode="decimal">
+      <input class="num-input" type="number" id="ceilingHeightInput" value="3.0" min="2" max="15" step="0.1" inputmode="decimal">
+      <span class="unit-label">m</span>
+      <span class="control-label" style="min-width:40px;margin-left:8px">Phone</span>
+      <input class="num-input" type="number" id="eyeHeightInput" value="1.5" min="0.8" max="2.2" step="0.1" inputmode="decimal">
       <span class="unit-label">m</span>
     </div>
 
-    <!-- PIR FOV slider — hidden when MLX is selected -->
     <div class="control-row" id="pirFovRow">
-      <span class="control-label">FOV</span>
+      <span class="control-label">PIR FOV</span>
       <input type="range" id="pirFovSlider" min="60" max="120" value="90" step="5">
       <span id="pirFovValue">90°</span>
     </div>
 
+    <div class="control-row">
+      <span class="control-label">Motion</span>
+      <button id="orientBtn" class="inactive">⚠ Enable Sensors</button>
+    </div>
+
   </div>
 
-  <!-- Camera permission / error screen -->
   <div id="errorScreen">
     <div class="err-icon">📷</div>
     <h2>Camera Access Needed</h2>
-    <p id="errorMsg">Please allow camera access in Settings → Safari → Camera, then reload.</p>
+    <p id="errorMsg">Go to Settings → Safari → Camera, enable access, then reload.</p>
     <button id="retryBtn" onclick="location.reload()">Try Again</button>
   </div>
 
-  <!--
-    NO external scripts — everything below is vanilla JS using the
-    built-in Canvas 2D API.  File opens directly from file:// with
-    no network requests whatsoever.
-  -->
   <script>
-    // =============================================================
-    //  SENSOR FOV VISUALIZER
-    //  Vanilla JS + Canvas 2D  ·  zero dependencies  ·  offline-safe
-    //  Open as file:// on iPhone Safari — no server required
-    // =============================================================
+  // ==============================================================
+  //  SENSOR FOV VISUALIZER  —  Physics-correct AR projection
+  //
+  //  Technique (no WebXR needed):
+  //   1. DeviceOrientationEvent gives the phone's pitch (beta).
+  //   2. When user taps, we ray-cast from the tap pixel through the
+  //      camera frustum into 3-D world space and intersect the
+  //      ceiling plane → sensor's world position.
+  //   3. Each frame we project the floor coverage footprint back to
+  //      2-D screen pixels using the current phone orientation.
+  //      This updates live as the user tilts the phone.
+  //
+  //  World coordinate system (right-hand, Y-up):
+  //   Origin = camera (phone) position.
+  //   +X = camera right, +Y = world up, +Z = scene forward when
+  //        phone is held upright in portrait (beta ≈ 90°).
+  //
+  //  Camera model:
+  //   Phone upright (beta=90°) → camera looks along +Z, up = +Y.
+  //   Tilt above horizontal = (90 − beta)°.
+  //   As phone tilts upward (beta decreases) the camera rotates
+  //   around the +X axis by angle `tilt`.
+  // ==============================================================
 
-    // ── MLX90642 fixed field-of-view ─────────────────────────────
-    const MLX_HFOV_DEG = 33;   // horizontal
-    const MLX_VFOV_DEG = 25;   // vertical
+  // ── Sensor specs ──────────────────────────────────────────────
+  const MLX_HFOV = 33;   // degrees
+  const MLX_VFOV = 25;   // degrees
 
-    // ── Approximate iPhone wide-lens horizontal FOV ───────────────
-    // iPhone 17 Pro Max main (1×) lens ≈ 65° horizontal.
-    // Used only to estimate a pixel-per-metre scale; not WebXR-accurate.
-    const APPROX_CAMERA_HFOV_DEG = 65;
+  // ── Approximate iPhone wide-lens horizontal FOV ───────────────
+  // iPhone 17 Pro Max main (1×) lens ≈ 65° horizontal.
+  const HFOV_DEG = 65;
 
-    // ── Application state ─────────────────────────────────────────
-    const state = {
-      sensorType:    'pir',   // 'pir' | 'mlx'
-      ceilingHeight: 3.0,     // metres
-      pirFovDeg:     90,      // degrees, range 60–120
-      tapPoint:      null,    // { x, y } in CSS pixels; null = no tap yet
+  // ── App state ─────────────────────────────────────────────────
+  const state = {
+    sensorType:    'pir',
+    ceilingHeight: 3.0,   // metres, floor→ceiling
+    eyeHeight:     1.5,   // metres, floor→phone camera
+    pirFovDeg:     90,
+
+    // Sensor position stored in WORLD ABSOLUTE coords.
+    // y is always = ceilingHeight; x,z set from ray-cast at tap time.
+    sensorWorldPos: null,
+  };
+
+  // ── Device orientation ────────────────────────────────────────
+  // beta: 90° = phone upright portrait (camera horizontal)
+  //       < 90° = top tilted back → camera looks upward
+  //       > 90° = top tilted forward → camera looks downward
+  let devBeta  = 90;   // fallback = camera horizontal
+  let devGamma = 0;
+  let orientationActive = false;
+
+  // ── Animation ─────────────────────────────────────────────────
+  let pulsePhase = 0;
+
+  // ── DOM ───────────────────────────────────────────────────────
+  const videoEl       = document.getElementById('cameraFeed');
+  const canvasEl      = document.getElementById('overlayCanvas');
+  const tapOverlayEl  = document.getElementById('tapOverlay');
+  const tapHintEl     = document.getElementById('tapHint');
+  const coverageEl    = document.getElementById('coverageDisplay');
+  const toastEl       = document.getElementById('toast');
+  const errorScreenEl = document.getElementById('errorScreen');
+  const errorMsgEl    = document.getElementById('errorMsg');
+  const orientBtnEl   = document.getElementById('orientBtn');
+  const ctx = canvasEl.getContext('2d');
+
+  let toastTimer = null;
+
+
+  // ==============================================================
+  //  CAMERA GEOMETRY HELPERS
+  // ==============================================================
+
+  /** Camera tilt above horizontal in radians. Positive = looking up. */
+  function cameraTilt() {
+    return (90 - devBeta) * (Math.PI / 180);
+  }
+
+  /** Vertical FOV derived from HFOV and screen aspect ratio. */
+  function vFovRad() {
+    const aspect = window.innerHeight / window.innerWidth;
+    return 2 * Math.atan(Math.tan(HFOV_DEG * Math.PI / 360) * aspect);
+  }
+
+  const tanHalfH = () => Math.tan(HFOV_DEG * Math.PI / 360);
+  const tanHalfV = () => Math.tan(vFovRad() / 2);
+
+
+  // ==============================================================
+  //  3-D MATH
+  // ==============================================================
+
+  /**
+   * Ray-cast a screen tap to the ceiling plane.
+   * Returns world-absolute { x, y, z } of the intersection,
+   * or null if the ray doesn't point toward the ceiling.
+   *
+   * Steps:
+   *   1. Convert pixel → normalised image plane coords (nx, ny).
+   *   2. Build ray in camera space: (px, py, 1) using FOV.
+   *   3. Rotate ray to world space using Rx(tilt).
+   *   4. Intersect with ceiling plane Y = ceilingHeight − eyeHeight
+   *      (relative to camera origin).
+   */
+  function tapToWorld(tapX, tapY) {
+    const tilt = cameraTilt();
+    const thH  = tanHalfH();
+    const thV  = tanHalfV();
+
+    // Normalised screen coords, range −0.5 … +0.5 (y positive upward)
+    const nx = tapX / window.innerWidth  - 0.5;
+    const ny = 0.5 - tapY / window.innerHeight;
+
+    // Image-plane ray direction (camera space, camera looks along +Z)
+    const px = nx * 2 * thH;
+    const py = ny * 2 * thV;
+    // camera-space z = 1 (unit forward)
+
+    // Rotate camera-space (px, py, 1) to world space using Rx(tilt):
+    //   world_x = px
+    //   world_y = py·cos(tilt) + 1·sin(tilt)    [camera +Y tilts toward +Z]
+    //   world_z = −py·sin(tilt) + 1·cos(tilt)
+    const ry = py * Math.cos(tilt) + Math.sin(tilt);
+    const rz = -py * Math.sin(tilt) + Math.cos(tilt);
+
+    // Ceiling is at relative height = ceilingHeight − eyeHeight above camera
+    const relCeilY = state.ceilingHeight - state.eyeHeight;
+
+    if (ry < 0.005) {
+      // Ray points downward or nearly horizontal — won't reach ceiling
+      return null;
+    }
+
+    const t = relCeilY / ry;
+    return {
+      x: px * t,
+      y: state.ceilingHeight,   // stored as ABSOLUTE world Y
+      z: rz * t,
     };
+  }
 
-    // ── Animation ─────────────────────────────────────────────────
-    let pulsePhase = 0;   // advances each frame for the breathing pulse ring
+  /**
+   * Project a 3-D world-absolute point to 2-D screen CSS pixels.
+   * Camera is at world (0, eyeHeight, 0).
+   * Returns { x, y } in CSS pixels, or null if behind the camera.
+   *
+   * Steps:
+   *   1. Translate world point to camera-relative coords.
+   *   2. Rotate to camera space using Rx(−tilt).
+   *   3. Perspective-divide onto image plane.
+   *   4. Convert to CSS pixels.
+   */
+  function worldToScreen(wp) {
+    const tilt = cameraTilt();
+    const thH  = tanHalfH();
+    const thV  = tanHalfV();
 
-    // ── DOM references ────────────────────────────────────────────
-    const videoEl       = document.getElementById('cameraFeed');
-    const canvasEl      = document.getElementById('overlayCanvas');
-    const tapOverlayEl  = document.getElementById('tapOverlay');
-    const tapHintEl     = document.getElementById('tapHint');
-    const coverageEl    = document.getElementById('coverageDisplay');
-    const errorScreenEl = document.getElementById('errorScreen');
-    const errorMsgEl    = document.getElementById('errorMsg');
+    // Camera-relative position
+    const wx = wp.x;
+    const wy = wp.y - state.eyeHeight;
+    const wz = wp.z;
 
-    // Canvas 2D context — obtained once, reused every frame
-    const ctx = canvasEl.getContext('2d');
+    // Rotate to camera space using inverse of Rx(tilt) = Rx(−tilt):
+    //   cx =  wx
+    //   cy =  wy·cos(tilt) − wz·sin(tilt)
+    //   cz =  wy·sin(tilt) + wz·cos(tilt)
+    const cx = wx;
+    const cy = wy * Math.cos(tilt) - wz * Math.sin(tilt);
+    const cz = wy * Math.sin(tilt) + wz * Math.cos(tilt);
+
+    if (cz < 0.01) return null;   // Behind the camera
+
+    // Perspective projection (camera looks along +Z)
+    const screenNX = (cx / cz) / (2 * thH);
+    const screenNY = (cy / cz) / (2 * thV);
+
+    return {
+      x: (screenNX + 0.5) * window.innerWidth,
+      y: (0.5 - screenNY) * window.innerHeight,
+    };
+  }
+
+  /** Convert world-absolute point to physical canvas pixels (DPR-scaled). */
+  function worldToPx(wp, dpr) {
+    const sp = worldToScreen(wp);
+    return sp ? { x: sp.x * dpr, y: sp.y * dpr } : null;
+  }
 
 
-    // =============================================================
-    //  CAMERA FEED
-    // =============================================================
+  // ==============================================================
+  //  COVERAGE GEOMETRY
+  // ==============================================================
 
-    async function startCamera() {
-      try {
-        // First attempt: exact rear camera
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { exact: 'environment' },
-            width:  { ideal: 1920 },
-            height: { ideal: 1080 },
-          },
-          audio: false,
-        });
-        videoEl.srcObject = stream;
-        await videoEl.play();
-      } catch (err) {
-        // OverconstrainedError: device lacks a labelled rear camera — retry softly
-        if (err.name === 'OverconstrainedError' || err.name === 'ConstraintNotSatisfiedError') {
-          await retryWithSoftConstraint();
-        } else {
-          showCameraError(err);
-        }
-      }
+  function pirRadiusM() {
+    return Math.tan((state.pirFovDeg / 2) * Math.PI / 180) * state.ceilingHeight;
+  }
+
+  function mlxDimsM() {
+    return {
+      w: 2 * Math.tan((MLX_HFOV / 2) * Math.PI / 180) * state.ceilingHeight,
+      h: 2 * Math.tan((MLX_VFOV / 2) * Math.PI / 180) * state.ceilingHeight,
+    };
+  }
+
+  // Floor is at absolute world Y = 0
+  const FLOOR_Y = 0;
+
+
+  // ==============================================================
+  //  DRAW LOOP
+  // ==============================================================
+
+  function drawFrame() {
+    requestAnimationFrame(drawFrame);
+
+    const dpr = window.devicePixelRatio || 1;
+    ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+
+    if (!state.sensorWorldPos) return;
+
+    pulsePhase += 0.04;
+    const sinP = Math.sin(pulsePhase);
+
+    // Project sensor (ceiling) position to screen
+    const ssp = worldToPx(state.sensorWorldPos, dpr);
+    if (!ssp) return;   // Sensor is currently behind/outside camera view
+
+    ctx.save();
+
+    if (state.sensorType === 'pir') {
+      drawPirOverlay(ssp, dpr, sinP);
+    } else {
+      drawMlxOverlay(ssp, dpr, sinP);
     }
 
-    async function retryWithSoftConstraint() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
-          audio: false,
-        });
-        videoEl.srcObject = stream;
-        await videoEl.play();
-      } catch (err) {
-        showCameraError(err);
-      }
+    drawSensorDot(ssp, dpr);
+    ctx.restore();
+  }
+
+  // ── PIR: floor coverage circle ────────────────────────────────
+  function drawPirOverlay(ssp, dpr, sinP) {
+    const R = pirRadiusM();
+    const N = 56;   // polygon segments for the circle
+
+    // Sample N world points on the floor coverage circle
+    const floorPts = [];
+    for (let i = 0; i <= N; i++) {
+      const θ = (i / N) * Math.PI * 2;
+      const p = worldToPx({
+        x: state.sensorWorldPos.x + R * Math.cos(θ),
+        y: FLOOR_Y,
+        z: state.sensorWorldPos.z + R * Math.sin(θ),
+      }, dpr);
+      if (p) floorPts.push(p);
     }
 
-    function showCameraError(err) {
-      let msg = 'Unable to access the camera on this device.';
+    if (floorPts.length < 3) return;
 
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        msg = 'Camera permission denied. Go to Settings → Safari → Camera, enable access, then tap Try Again.';
-      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-        msg = 'No camera was found on this device.';
-      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-        msg = 'The camera is in use by another app. Close other apps and tap Try Again.';
-      } else if (err.name === 'SecurityError') {
-        msg = 'Camera blocked by security policy. On iOS, file:// pages support getUserMedia — if you see this, check Settings → Safari → Camera.';
-      }
-
-      errorMsgEl.textContent = msg;
-      errorScreenEl.style.display = 'flex';
-    }
-
-
-    // =============================================================
-    //  CANVAS SIZING
-    // Backing store must be in physical pixels (devicePixelRatio)
-    // so shapes are crisp on Retina / ProMotion displays.
-    // =============================================================
-
-    function resizeCanvas() {
-      const dpr = window.devicePixelRatio || 1;
-      canvasEl.width  = window.innerWidth  * dpr;
-      canvasEl.height = window.innerHeight * dpr;
-      // CSS keeps it at 100% × 100% via the stylesheet
-    }
-
-
-    // =============================================================
-    //  FOV GEOMETRY MATH
-    // =============================================================
-
-    /** Radius of PIR coverage circle on the floor (metres). */
-    function pirRadiusM() {
-      return Math.tan((state.pirFovDeg / 2) * (Math.PI / 180)) * state.ceilingHeight;
-    }
-
-    /** Width × height of MLX90642 coverage footprint on the floor (metres). */
-    function mlxDimsM() {
-      return {
-        w: 2 * Math.tan((MLX_HFOV_DEG / 2) * (Math.PI / 180)) * state.ceilingHeight,
-        h: 2 * Math.tan((MLX_VFOV_DEG / 2) * (Math.PI / 180)) * state.ceilingHeight,
-      };
-    }
-
-    /**
-     * Pixels per metre (physical pixels, DPR-adjusted).
-     *
-     * At ceiling height H, the phone camera shows a ceiling strip roughly
-     *   2 × tan(HFOV/2) × H  metres wide, stretched across the screen width.
-     * Dividing gives the scale factor.  This is approximate — no device
-     * intrinsics are available without WebXR.
-     */
-    function physicalPixelsPerMetre() {
-      const dpr = window.devicePixelRatio || 1;
-      const visibleWidthM = 2 * Math.tan((APPROX_CAMERA_HFOV_DEG / 2) * (Math.PI / 180))
-                              * state.ceilingHeight;
-      return (window.innerWidth * dpr) / visibleWidthM;
-    }
-
-
-    // =============================================================
-    //  DRAW ONE FRAME  (called by requestAnimationFrame)
-    //
-    //  Visualization concept:
-    //    The sensor is mounted on the ceiling at the tap point.
-    //    Its FOV projects DOWNWARD as a cone (PIR) or rectangular
-    //    frustum (MLX90642).  We draw this as:
-    //      • a sensor dot anchored to the ceiling at the tap point
-    //      • diverging lines showing the cone edges going downward
-    //      • a filled floor-footprint shape at the base of the cone
-    //
-    //  "Downward on screen" is used as a proxy for "toward the floor"
-    //  because the camera is pointing at the ceiling — the floor is
-    //  behind the viewer and cannot appear in the feed.
-    // =============================================================
-
-    function drawFrame() {
-      requestAnimationFrame(drawFrame);
-
-      const dpr = window.devicePixelRatio || 1;
-      ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
-
-      if (!state.tapPoint) return;
-
-      // Tap point in physical pixels
-      const tx  = state.tapPoint.x * dpr;
-      const ty  = state.tapPoint.y * dpr;
-      const ppm = physicalPixelsPerMetre();
-
-      pulsePhase += 0.045;
-      const sinP = Math.sin(pulsePhase);
-
-      // ── Cone height on screen ─────────────────────────────────
-      // Physical cone height = ceilingHeight metres × pixels-per-metre.
-      // Capped at 65 % of canvas height so the footprint stays on screen.
-      // The cone angle is preserved when capping (base width scales with height).
-      const fullConeH = state.ceilingHeight * ppm;
-      const maxConeH  = canvasEl.height * 0.65;
-      const coneH     = Math.min(fullConeH, maxConeH);
-      const coneRatio = coneH / fullConeH; // < 1 when capped
-
-      // Centre of the floor footprint (directly below the sensor)
-      const baseX = tx;
-      const baseY = ty + coneH;
-
-      ctx.save();
-
-      if (state.sensorType === 'pir') {
-        // ── PIR: downward cone → circular floor footprint ────────
-
-        const rM    = pirRadiusM();
-        const baseR = rM * ppm * coneRatio; // footprint radius (physical px)
-
-        // ① Cone interior fill (triangle apex→base)
-        ctx.beginPath();
-        ctx.moveTo(tx, ty);
-        ctx.lineTo(baseX - baseR, baseY);
-        ctx.lineTo(baseX + baseR, baseY);
-        ctx.closePath();
-        ctx.fillStyle = 'rgba(33, 150, 243, 0.14)';
-        ctx.fill();
-
-        // ② Left and right cone boundary lines
-        ctx.strokeStyle = 'rgba(66, 165, 245, 0.72)';
-        ctx.lineWidth   = 2 * dpr;
-        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(baseX - baseR, baseY); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(baseX + baseR, baseY); ctx.stroke();
-
-        // ③ Dashed centre axis (vertical reference line)
-        ctx.setLineDash([6 * dpr, 5 * dpr]);
-        ctx.strokeStyle = 'rgba(144, 202, 249, 0.42)';
-        ctx.lineWidth   = 1.5 * dpr;
-        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(baseX, baseY); ctx.stroke();
-        ctx.setLineDash([]);
-
-        // ④ Floor footprint — animated pulse ring
-        const pulseR = baseR + (9 + 6 * sinP) * dpr;
-        ctx.beginPath();
-        ctx.arc(baseX, baseY, pulseR, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(144, 202, 249, ${(0.16 + 0.12 * sinP).toFixed(2)})`;
-        ctx.lineWidth   = 11 * dpr;
-        ctx.stroke();
-
-        // ④ Floor footprint — filled circle
-        ctx.beginPath();
-        ctx.arc(baseX, baseY, baseR, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(33, 150, 243, 0.30)';
-        ctx.fill();
-
-        // ④ Floor footprint — solid border ring
-        ctx.beginPath();
-        ctx.arc(baseX, baseY, baseR, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(66, 165, 245, 0.92)';
-        ctx.lineWidth   = 2.5 * dpr;
-        ctx.stroke();
-
-        // ⑤ Dimension pill below footprint (diameter in metres)
-        drawDimLabel(baseX, baseY + baseR + 10 * dpr, `Ø ${(rM * 2).toFixed(1)} m`, dpr);
-
-      } else {
-        // ── MLX90642: downward frustum → rectangular floor footprint ─
-
-        const { w: wM, h: hM } = mlxDimsM();
-        const baseW  = wM * ppm * coneRatio;   // footprint width  (physical px)
-        const baseHp = hM * ppm * coneRatio;   // footprint height (physical px)
-
-        const rLeft = baseX - baseW / 2;
-        const rTop  = baseY - baseHp / 2;
-
-        // ① Trapezoid interior fill (apex→base, horizontal FOV cross-section)
-        ctx.beginPath();
-        ctx.moveTo(tx, ty);
-        ctx.lineTo(rLeft,          baseY);
-        ctx.lineTo(rLeft + baseW,  baseY);
-        ctx.closePath();
-        ctx.fillStyle = 'rgba(255, 111, 0, 0.14)';
-        ctx.fill();
-
-        // ② Cone boundary lines
-        ctx.strokeStyle = 'rgba(255, 167, 38, 0.72)';
-        ctx.lineWidth   = 2 * dpr;
-        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(rLeft,         baseY); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(rLeft + baseW, baseY); ctx.stroke();
-
-        // ③ Dashed centre axis
-        ctx.setLineDash([6 * dpr, 5 * dpr]);
-        ctx.strokeStyle = 'rgba(255, 204, 128, 0.42)';
-        ctx.lineWidth   = 1.5 * dpr;
-        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(baseX, baseY); ctx.stroke();
-        ctx.setLineDash([]);
-
-        // ④ Floor footprint — animated pulse ring
-        const diag   = Math.sqrt(baseW * baseW + baseHp * baseHp) / 2;
-        const pulseR = diag + (9 + 6 * sinP) * dpr;
-        ctx.beginPath();
-        ctx.arc(baseX, baseY, pulseR, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(255, 204, 128, ${(0.16 + 0.12 * sinP).toFixed(2)})`;
-        ctx.lineWidth   = 11 * dpr;
-        ctx.stroke();
-
-        // ④ Floor footprint — filled rectangle
-        ctx.fillStyle = 'rgba(255, 111, 0, 0.30)';
-        ctx.fillRect(rLeft, rTop, baseW, baseHp);
-
-        // ④ Floor footprint — solid border
-        ctx.strokeStyle = 'rgba(255, 167, 38, 0.92)';
-        ctx.lineWidth   = 2.5 * dpr;
-        ctx.strokeRect(rLeft, rTop, baseW, baseHp);
-
-        // ④ Corner accent L-marks
-        const cm = 10 * dpr;
-        ctx.strokeStyle = 'rgba(255, 213, 79, 0.95)';
-        ctx.lineWidth   = 2 * dpr;
-        [[rLeft, rTop], [rLeft + baseW, rTop], [rLeft, rTop + baseHp], [rLeft + baseW, rTop + baseHp]]
-          .forEach(([cx, cy], i) => {
-            const sx = i % 2 === 0 ?  1 : -1;
-            const sy = i < 2       ?  1 : -1;
-            ctx.beginPath();
-            ctx.moveTo(cx + sx * cm, cy);
-            ctx.lineTo(cx, cy);
-            ctx.lineTo(cx, cy + sy * cm);
-            ctx.stroke();
-          });
-
-        // ⑤ Dimension pill below footprint
-        drawDimLabel(baseX, rTop + baseHp + 10 * dpr, `${wM.toFixed(1)} × ${hM.toFixed(1)} m`, dpr);
-      }
-
-      // ── Ceiling mount bracket at sensor point ────────────────
-      // A short horizontal bar + hatching indicates the sensor is
-      // mounted flush to a ceiling surface, not floating in space.
-      const barLen = 22 * dpr;
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-      ctx.lineWidth   = 3 * dpr;
-      ctx.beginPath();
-      ctx.moveTo(tx - barLen, ty);
-      ctx.lineTo(tx + barLen, ty);
-      ctx.stroke();
-
-      // Hatching marks above the bar (represent the ceiling surface)
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.20)';
+    // ① Cone lines: sensor → 4 cardinal points on coverage circle
+    const COL_LINE = 'rgba(66,165,245,0.55)';
+    [0, Math.PI / 2, Math.PI, 3 * Math.PI / 2].forEach(θ => {
+      const p = worldToPx({ x: state.sensorWorldPos.x + R * Math.cos(θ), y: FLOOR_Y, z: state.sensorWorldPos.z + R * Math.sin(θ) }, dpr);
+      if (!p) return;
+      ctx.setLineDash([6 * dpr, 5 * dpr]);
+      ctx.strokeStyle = COL_LINE;
       ctx.lineWidth   = 1.5 * dpr;
-      for (let i = -3; i <= 3; i++) {
-        const hx = tx + i * 7 * dpr;
-        ctx.beginPath();
-        ctx.moveTo(hx,           ty);
-        ctx.lineTo(hx - 5 * dpr, ty - 8 * dpr);
-        ctx.stroke();
-      }
+      ctx.beginPath(); ctx.moveTo(ssp.x, ssp.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+    });
+    ctx.setLineDash([]);
 
-      // ── Sensor dot ───────────────────────────────────────────
-      ctx.beginPath();
-      ctx.arc(tx, ty, 9 * dpr, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
+    // ② Animated pulse outline (scaled outward from centroid)
+    const cx = floorPts.reduce((s, p) => s + p.x, 0) / floorPts.length;
+    const cy = floorPts.reduce((s, p) => s + p.y, 0) / floorPts.length;
+    const pScale = 1 + 0.06 + 0.04 * sinP;
+    ctx.beginPath();
+    floorPts.forEach((p, i) => {
+      const px = cx + (p.x - cx) * pScale;
+      const py = cy + (p.y - cy) * pScale;
+      i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+    });
+    ctx.closePath();
+    ctx.strokeStyle = `rgba(144,202,249,${(0.15 + 0.12 * sinP).toFixed(2)})`;
+    ctx.lineWidth   = 12 * dpr;
+    ctx.stroke();
 
-      ctx.beginPath();
-      ctx.arc(tx, ty, 5 * dpr, 0, Math.PI * 2);
-      ctx.fillStyle = state.sensorType === 'pir' ? '#1565C0' : '#E65100';
-      ctx.fill();
+    // ③ Coverage fill
+    ctx.beginPath();
+    floorPts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+    ctx.closePath();
+    ctx.fillStyle   = 'rgba(33,150,243,0.22)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(66,165,245,0.90)';
+    ctx.lineWidth   = 2.5 * dpr;
+    ctx.stroke();
+  }
 
-      ctx.restore();
+  // ── MLX90642: floor coverage rectangle ───────────────────────
+  function drawMlxOverlay(ssp, dpr, sinP) {
+    const { w: wM, h: hM } = mlxDimsM();
+    const hw = wM / 2, hd = hM / 2;
+    const sx = state.sensorWorldPos.x, sz = state.sensorWorldPos.z;
+
+    // 4 corners of floor rectangle (at FLOOR_Y)
+    const worldCorners = [
+      { x: sx - hw, y: FLOOR_Y, z: sz - hd },
+      { x: sx + hw, y: FLOOR_Y, z: sz - hd },
+      { x: sx + hw, y: FLOOR_Y, z: sz + hd },
+      { x: sx - hw, y: FLOOR_Y, z: sz + hd },
+    ];
+    const corners = worldCorners.map(c => worldToPx(c, dpr)).filter(Boolean);
+
+    if (corners.length < 3) return;
+
+    // ① Cone lines from sensor to each corner
+    corners.forEach(c => {
+      ctx.setLineDash([6 * dpr, 5 * dpr]);
+      ctx.strokeStyle = 'rgba(255,167,38,0.55)';
+      ctx.lineWidth   = 1.5 * dpr;
+      ctx.beginPath(); ctx.moveTo(ssp.x, ssp.y); ctx.lineTo(c.x, c.y); ctx.stroke();
+    });
+    ctx.setLineDash([]);
+
+    // ② Animated pulse outline
+    const cx = corners.reduce((s, p) => s + p.x, 0) / corners.length;
+    const cy = corners.reduce((s, p) => s + p.y, 0) / corners.length;
+    const pScale = 1 + 0.06 + 0.04 * sinP;
+    ctx.beginPath();
+    corners.forEach((p, i) => {
+      const px = cx + (p.x - cx) * pScale;
+      const py = cy + (p.y - cy) * pScale;
+      i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+    });
+    ctx.closePath();
+    ctx.strokeStyle = `rgba(255,204,128,${(0.15 + 0.12 * sinP).toFixed(2)})`;
+    ctx.lineWidth   = 12 * dpr;
+    ctx.stroke();
+
+    // ③ Coverage fill + border
+    ctx.beginPath();
+    corners.forEach((c, i) => i === 0 ? ctx.moveTo(c.x, c.y) : ctx.lineTo(c.x, c.y));
+    ctx.closePath();
+    ctx.fillStyle   = 'rgba(255,111,0,0.22)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,167,38,0.90)';
+    ctx.lineWidth   = 2.5 * dpr;
+    ctx.stroke();
+
+    // ④ Corner L-marks
+    const cm = 10 * dpr;
+    ctx.strokeStyle = 'rgba(255,213,79,0.95)';
+    ctx.lineWidth   = 2 * dpr;
+    corners.forEach((c, i) => {
+      const next = corners[(i + 1) % corners.length];
+      const prev = corners[(i + 3) % corners.length];
+      const toNext = len => ({ x: c.x + (next.x - c.x) / (Math.hypot(next.x - c.x, next.y - c.y) || 1) * len, y: c.y + (next.y - c.y) / (Math.hypot(next.x - c.x, next.y - c.y) || 1) * len });
+      const toPrev = len => ({ x: c.x + (prev.x - c.x) / (Math.hypot(prev.x - c.x, prev.y - c.y) || 1) * len, y: c.y + (prev.y - c.y) / (Math.hypot(prev.x - c.x, prev.y - c.y) || 1) * len });
+      const a = toNext(cm), b = toPrev(cm);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(c.x, c.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    });
+  }
+
+  // ── Sensor position dot (ceiling mount) ──────────────────────
+  function drawSensorDot(ssp, dpr) {
+    // Ceiling surface indicator bar + hatching
+    const barLen = 22 * dpr;
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth   = 3 * dpr;
+    ctx.beginPath(); ctx.moveTo(ssp.x - barLen, ssp.y); ctx.lineTo(ssp.x + barLen, ssp.y); ctx.stroke();
+
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.strokeStyle = 'rgba(255,255,255,0.20)';
+    for (let i = -3; i <= 3; i++) {
+      const hx = ssp.x + i * 7 * dpr;
+      ctx.beginPath(); ctx.moveTo(hx, ssp.y); ctx.lineTo(hx - 5 * dpr, ssp.y - 8 * dpr); ctx.stroke();
     }
 
-    // Small rounded-pill label drawn on the canvas at (x, y top-left of pill centre).
-    function drawDimLabel(cx, y, text, dpr) {
-      const fs  = 12 * dpr;
-      ctx.font  = `600 ${fs}px -apple-system, sans-serif`;
-      const tw  = ctx.measureText(text).width;
-      const pad = 5 * dpr;
-      const bw  = tw + pad * 2;
-      const bh  = fs + pad * 2;
-      const r   = 4 * dpr;
-      const x   = cx - bw / 2;
+    // White outer ring
+    ctx.beginPath(); ctx.arc(ssp.x, ssp.y, 9 * dpr, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff'; ctx.fill();
 
-      // Background pill
-      ctx.beginPath();
-      ctx.moveTo(x + r, y);
-      ctx.lineTo(x + bw - r, y);
-      ctx.quadraticCurveTo(x + bw, y, x + bw, y + r);
-      ctx.lineTo(x + bw, y + bh - r);
-      ctx.quadraticCurveTo(x + bw, y + bh, x + bw - r, y + bh);
-      ctx.lineTo(x + r, y + bh);
-      ctx.quadraticCurveTo(x, y + bh, x, y + bh - r);
-      ctx.lineTo(x, y + r);
-      ctx.quadraticCurveTo(x, y, x + r, y);
-      ctx.closePath();
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-      ctx.fill();
-
-      ctx.fillStyle    = 'rgba(255, 255, 255, 0.90)';
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'top';
-      ctx.fillText(text, cx, y + pad);
-    }
+    // Coloured inner dot
+    ctx.beginPath(); ctx.arc(ssp.x, ssp.y, 5 * dpr, 0, Math.PI * 2);
+    ctx.fillStyle = state.sensorType === 'pir' ? '#1565C0' : '#E65100'; ctx.fill();
+  }
 
 
-    // =============================================================
-    //  COVERAGE READOUT
-    // Updates the top pill whenever state changes.
-    // =============================================================
+  // ==============================================================
+  //  CAMERA FEED
+  // ==============================================================
 
-    function updateCoverageText() {
-      if (!state.tapPoint) return;
-
-      let m2;
-      if (state.sensorType === 'pir') {
-        const r = pirRadiusM();
-        m2 = Math.PI * r * r;
-      } else {
-        const { w, h } = mlxDimsM();
-        m2 = w * h;
-      }
-
-      coverageEl.textContent = `Floor coverage ≈ ${m2.toFixed(1)} m²`;
-      coverageEl.style.display = 'block';
-    }
-
-
-    // =============================================================
-    //  TAP / CLICK HANDLER
-    // =============================================================
-
-    function handleTap(e) {
-      e.preventDefault();
-
-      let clientX, clientY;
-      if (e.touches && e.touches.length > 0) {
-        clientX = e.touches[0].clientX;
-        clientY = e.touches[0].clientY;
-      } else {
-        clientX = e.clientX;
-        clientY = e.clientY;
-      }
-
-      state.tapPoint = { x: clientX, y: clientY };
-      tapHintEl.style.display = 'none';   // hide hint after first tap
-      updateCoverageText();
-    }
-
-
-    // =============================================================
-    //  UI CONTROL BINDINGS
-    // =============================================================
-
-    function bindControls() {
-      // Sensor type segmented control
-      document.querySelectorAll('.sensor-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          document.querySelectorAll('.sensor-btn').forEach(b => b.classList.remove('active'));
-          btn.classList.add('active');
-          state.sensorType = btn.dataset.type;
-
-          // Show FOV slider only for PIR
-          document.getElementById('pirFovRow').style.display =
-            (state.sensorType === 'pir') ? 'flex' : 'none';
-
-          updateCoverageText();
-        });
+  async function startCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { exact: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: false,
       });
+      videoEl.srcObject = stream; await videoEl.play();
+    } catch (err) {
+      if (err.name === 'OverconstrainedError' || err.name === 'ConstraintNotSatisfiedError') {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+          videoEl.srcObject = stream; await videoEl.play();
+        } catch (e) { showCameraError(e); }
+      } else { showCameraError(err); }
+    }
+  }
 
-      // Ceiling height number input
-      document.getElementById('ceilingHeightInput').addEventListener('input', e => {
-        const val = parseFloat(e.target.value);
-        if (!isNaN(val) && val >= 1.0 && val <= 20.0) {
-          state.ceilingHeight = val;
-          updateCoverageText();
+  function showCameraError(err) {
+    const msgs = {
+      NotAllowedError:      'Camera permission denied. Go to Settings → Safari → Camera, then reload.',
+      PermissionDeniedError:'Camera permission denied. Go to Settings → Safari → Camera, then reload.',
+      NotFoundError:        'No camera found on this device.',
+      DevicesNotFoundError: 'No camera found on this device.',
+      NotReadableError:     'Camera is in use by another app. Close other apps and reload.',
+    };
+    errorMsgEl.textContent = msgs[err.name] || 'Unable to access the camera.';
+    errorScreenEl.style.display = 'flex';
+  }
+
+
+  // ==============================================================
+  //  DEVICE ORIENTATION
+  // ==============================================================
+
+  function handleOrientation(e) {
+    if (e.beta == null) return;
+    devBeta  = e.beta;
+    devGamma = e.gamma || 0;
+    if (!orientationActive) {
+      orientationActive = true;
+      orientBtnEl.textContent = '✓ Sensors Active';
+      orientBtnEl.className   = 'active';
+    }
+  }
+
+  async function requestOrientationAccess() {
+    if (typeof DeviceOrientationEvent === 'undefined') {
+      orientBtnEl.textContent = '✗ Not available'; return;
+    }
+    if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+      // iOS 13+ — must be called in a user-gesture handler
+      try {
+        const resp = await DeviceOrientationEvent.requestPermission();
+        if (resp === 'granted') {
+          window.addEventListener('deviceorientation', handleOrientation, true);
+          orientBtnEl.textContent = '✓ Sensors Active';
+          orientBtnEl.className   = 'active';
+        } else {
+          orientBtnEl.textContent = '✗ Permission denied';
         }
-      });
+      } catch (e) {
+        orientBtnEl.textContent = '✗ Error';
+      }
+    } else {
+      // Android / desktop — no permission prompt needed
+      window.addEventListener('deviceorientation', handleOrientation, true);
+      orientBtnEl.textContent = '✓ Sensors Active';
+      orientBtnEl.className   = 'active';
+    }
+  }
 
-      // PIR FOV range slider
-      const fovSlider  = document.getElementById('pirFovSlider');
-      const fovValueEl = document.getElementById('pirFovValue');
 
-      fovSlider.addEventListener('input', e => {
-        state.pirFovDeg       = parseInt(e.target.value, 10);
-        fovValueEl.textContent = `${state.pirFovDeg}°`;
+  // ==============================================================
+  //  TAP HANDLER
+  // ==============================================================
+
+  function handleTap(e) {
+    e.preventDefault();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+    const worldPos = tapToWorld(clientX, clientY);
+
+    if (!worldPos) {
+      // Ray didn't reach ceiling — camera angle too shallow
+      showToast('Tilt phone upward so the ceiling is visible, then tap again');
+      return;
+    }
+
+    state.sensorWorldPos = worldPos;
+    tapHintEl.style.display = 'none';
+    updateCoverageText();
+  }
+
+  function showToast(msg, ms = 2500) {
+    toastEl.textContent = msg;
+    toastEl.style.display = 'block';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toastEl.style.display = 'none'; }, ms);
+  }
+
+
+  // ==============================================================
+  //  COVERAGE TEXT
+  // ==============================================================
+
+  function updateCoverageText() {
+    if (!state.sensorWorldPos) return;
+    let m2, detail;
+    if (state.sensorType === 'pir') {
+      const r = pirRadiusM();
+      m2 = Math.PI * r * r;
+      detail = `Ø ${(r * 2).toFixed(1)} m`;
+    } else {
+      const { w, h } = mlxDimsM();
+      m2 = w * h;
+      detail = `${w.toFixed(1)} × ${h.toFixed(1)} m`;
+    }
+    coverageEl.textContent = `Floor coverage ≈ ${m2.toFixed(1)} m²  (${detail})`;
+    coverageEl.style.display = 'block';
+  }
+
+
+  // ==============================================================
+  //  CANVAS SIZING
+  // ==============================================================
+
+  function resizeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    canvasEl.width  = window.innerWidth  * dpr;
+    canvasEl.height = window.innerHeight * dpr;
+  }
+
+
+  // ==============================================================
+  //  UI BINDINGS
+  // ==============================================================
+
+  function bindControls() {
+    // Sensor type
+    document.querySelectorAll('.sensor-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.sensor-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        state.sensorType = btn.dataset.type;
+        document.getElementById('pirFovRow').style.display = state.sensorType === 'pir' ? 'flex' : 'none';
         updateCoverageText();
       });
+    });
+
+    // Ceiling height
+    document.getElementById('ceilingHeightInput').addEventListener('input', e => {
+      const v = parseFloat(e.target.value);
+      if (!isNaN(v) && v >= 1 && v <= 20) {
+        state.ceilingHeight = v;
+        // Sensor stays at ceiling — update absolute Y
+        if (state.sensorWorldPos) state.sensorWorldPos.y = v;
+        updateCoverageText();
+      }
+    });
+
+    // Phone (eye) height
+    document.getElementById('eyeHeightInput').addEventListener('input', e => {
+      const v = parseFloat(e.target.value);
+      if (!isNaN(v) && v >= 0.5 && v <= 2.5) {
+        state.eyeHeight = v;
+        updateCoverageText();
+      }
+    });
+
+    // PIR FOV slider
+    const fovSlider = document.getElementById('pirFovSlider');
+    const fovLabel  = document.getElementById('pirFovValue');
+    fovSlider.addEventListener('input', e => {
+      state.pirFovDeg = parseInt(e.target.value, 10);
+      fovLabel.textContent = `${state.pirFovDeg}°`;
+      updateCoverageText();
+    });
+
+    // Motion sensors button — must be in user gesture
+    orientBtnEl.addEventListener('click', requestOrientationAccess);
+
+    window.addEventListener('resize', () => { resizeCanvas(); });
+  }
+
+
+  // ==============================================================
+  //  INIT
+  // ==============================================================
+
+  async function init() {
+    resizeCanvas();
+    bindControls();
+
+    tapOverlayEl.addEventListener('touchstart', handleTap, { passive: false });
+    tapOverlayEl.addEventListener('click',      handleTap);
+
+    requestAnimationFrame(drawFrame);
+
+    // Try orientation without prompt first (works on Android / desktop)
+    if (typeof DeviceOrientationEvent !== 'undefined' &&
+        typeof DeviceOrientationEvent.requestPermission !== 'function') {
+      window.addEventListener('deviceorientation', handleOrientation, true);
     }
 
+    await startCamera();
+  }
 
-    // =============================================================
-    //  WINDOW RESIZE
-    // =============================================================
-
-    function onResize() {
-      resizeCanvas();
-      // drawFrame() re-reads state each frame — no overlay rebuild needed
-    }
-
-
-    // =============================================================
-    //  ENTRY POINT
-    // =============================================================
-
-    async function init() {
-      resizeCanvas();
-      bindControls();
-
-      tapOverlayEl.addEventListener('touchstart', handleTap, { passive: false });
-      tapOverlayEl.addEventListener('click',      handleTap);
-
-      window.addEventListener('resize', onResize);
-
-      // Start the render loop (runs forever, clears + redraws each frame)
-      requestAnimationFrame(drawFrame);
-
-      await startCamera();
-    }
-
-    init();
+  init();
   </script>
 </body>
 </html>
